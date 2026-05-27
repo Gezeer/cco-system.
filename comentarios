@@ -1,0 +1,1030 @@
+/*
+========================================================
+INTRANET KPI CCO • SLU
+========================================================
+
+SISTEMA:
+- Leitura automática de TODAS as abas da planilha
+- Consolidação automática dos KPI’s
+- Painel Executivo
+- Execução P1 a P12
+- Indicadores operacionais
+- Gráficos automáticos
+- Relatórios executivos
+
+REGRAS PRINCIPAIS:
+1. O sistema analisa TODAS as sheets
+2. O Painel Executivo é a base principal
+3. Valor = Valor Fixo × Acumulado do Mês
+4. Índice máximo = 100%
+5. P1 e P2 NÃO mostram valor estimado
+========================================================
+*/
+
+
+/*
+========================================================
+VARIÁVEIS GLOBAIS
+========================================================
+*/
+
+let painelExecutivo = [];
+
+let operacoes = [];
+
+let todasAsAbasImportadas = [];
+
+let graficoExecucao = null;
+
+let graficoAcumulado = null;
+
+
+/*
+========================================================
+INICIALIZAÇÃO DO SISTEMA
+========================================================
+*/
+
+document.addEventListener("DOMContentLoaded", () => {
+
+  atualizarData();
+
+  const inputArquivo =
+    document.getElementById("arquivoExcel");
+
+  if (inputArquivo) {
+
+    inputArquivo.addEventListener(
+      "change",
+      importarArquivos
+    );
+  }
+
+  atualizarTudo();
+});
+
+
+/*
+========================================================
+ATUALIZA TODOS OS COMPONENTES
+========================================================
+*/
+
+function atualizarTudo() {
+
+  renderKPIs();
+
+  renderPainelExecutivo();
+
+  renderContratoExecutivo();
+
+  renderResumoExecutivo();
+
+  renderAlertasExecutivos();
+
+  renderTabelaPerguntas();
+
+  renderFiltros();
+
+  renderTabelaDados();
+
+  criarGraficosPainel();
+}
+
+
+/*
+========================================================
+ATUALIZA DATA DO TOPO
+========================================================
+*/
+
+function atualizarData() {
+
+  const dataAtual =
+    document.getElementById("dataAtual");
+
+  if (!dataAtual) return;
+
+  dataAtual.innerText =
+    new Date().toLocaleDateString("pt-BR", {
+
+      weekday: "long",
+
+      day: "2-digit",
+
+      month: "long",
+
+      year: "numeric"
+    });
+}
+
+
+/*
+========================================================
+IMPORTAÇÃO DAS PLANILHAS
+========================================================
+
+ESTA É A PRINCIPAL FUNÇÃO DO SISTEMA
+
+FLUXO:
+1. Lê arquivo Excel
+2. Percorre TODAS as abas
+3. Converte para JSON
+4. Normaliza colunas
+5. Gera Painel Executivo
+6. Gera Operações
+========================================================
+*/
+
+async function importarArquivos(evento) {
+
+  const arquivos =
+    Array.from(evento.target.files || []);
+
+  if (!arquivos.length) return;
+
+  /*
+  ======================================================
+  LIMPA MEMÓRIA
+  ======================================================
+  */
+
+  painelExecutivo = [];
+
+  operacoes = [];
+
+  todasAsAbasImportadas = [];
+
+  /*
+  ======================================================
+  GUARDA TODAS AS ABAS
+  ======================================================
+  */
+
+  const abasPorNome = {};
+
+  /*
+  ======================================================
+  PERCORRE TODOS OS ARQUIVOS
+  ======================================================
+  */
+
+  for (const arquivo of arquivos) {
+
+    /*
+    ====================================================
+    CONVERTE ARQUIVO EM BUFFER
+    ====================================================
+    */
+
+    const buffer =
+      await arquivo.arrayBuffer();
+
+    /*
+    ====================================================
+    LÊ O EXCEL
+    ====================================================
+    */
+
+    const workbook = XLSX.read(buffer, {
+
+      type: "array",
+
+      cellDates: true
+    });
+
+    /*
+    ====================================================
+    PERCORRE TODAS AS SHEETS
+    ====================================================
+    */
+
+    workbook.SheetNames.forEach(nomeAba => {
+
+      /*
+      ==================================================
+      PEGA A ABA
+      ==================================================
+      */
+
+      const sheet =
+        workbook.Sheets[nomeAba];
+
+      /*
+      ==================================================
+      CONVERTE ABA EM JSON
+      ==================================================
+      */
+
+      const dados =
+        XLSX.utils.sheet_to_json(sheet, {
+
+          defval: "",
+
+          raw: false
+        });
+
+      /*
+      ==================================================
+      NORMALIZA COLUNAS
+      ==================================================
+      */
+
+      const dadosNormalizados =
+        dados.map(linha =>
+          normalizarObjeto(linha)
+        );
+
+      /*
+      ==================================================
+      SALVA ABA PELO NOME
+      ==================================================
+      */
+
+      abasPorNome[
+        normalizar(nomeAba)
+      ] = dadosNormalizados;
+
+      /*
+      ==================================================
+      SALVA CONTROLE DE ABAS
+      ==================================================
+      */
+
+      todasAsAbasImportadas.push({
+
+        arquivo: arquivo.name,
+
+        aba: nomeAba,
+
+        dados: dadosNormalizados
+      });
+    });
+  }
+
+  /*
+  ======================================================
+  GERA PAINEL EXECUTIVO
+  ======================================================
+  */
+
+  gerarPainelExecutivoCompleto(
+    abasPorNome
+  );
+
+  /*
+  ======================================================
+  GERA OPERAÇÕES
+  ======================================================
+  */
+
+  gerarOperacoes(abasPorNome);
+
+  /*
+  ======================================================
+  MOSTRA INFORMAÇÕES DA IMPORTAÇÃO
+  ======================================================
+  */
+
+  preencherTexto(
+    "nomeArquivo",
+
+    `${arquivos.length} arquivo(s) importado(s) | ${todasAsAbasImportadas.length} aba(s) lida(s)`
+  );
+
+  /*
+  ======================================================
+  ATUALIZA INTERFACE
+  ======================================================
+  */
+
+  atualizarTudo();
+
+  alert(
+    "Planilha analisada com sucesso!"
+  );
+
+  evento.target.value = "";
+}
+
+
+/*
+========================================================
+GERA PAINEL EXECUTIVO COMPLETO
+========================================================
+
+ABAS ANALISADAS:
+- Painel Executivo
+- Resumo Diário
+- P5
+- P6
+- P9
+========================================================
+*/
+
+function gerarPainelExecutivoCompleto(abas) {
+
+  /*
+  ======================================================
+  PEGA AS ABAS
+  ======================================================
+  */
+
+  const painel =
+    abas["painel executivo"] || [];
+
+  const resumo =
+    abas["resumo_diario"] || [];
+
+  const p5 =
+    abas["p5"] || [];
+
+  const p6 =
+    abas["p6"] || [];
+
+  const p9 =
+    abas["p9"] || [];
+
+  /*
+  ======================================================
+  CALCULA ACUMULADOS
+  ======================================================
+  */
+
+  const acumulados =
+    calcularAcumuladosPorServico(
+
+      resumo,
+
+      p5,
+
+      p6,
+
+      p9
+    );
+
+  /*
+  ======================================================
+  MONTA O PAINEL FINAL
+  ======================================================
+  */
+
+  painelExecutivo =
+    painel.map(linha => {
+
+      /*
+      ==================================================
+      IDENTIFICA SERVIÇO
+      ==================================================
+      */
+
+      const servico =
+        linha.servico ||
+        linha.programa ||
+        linha.codigo ||
+        "";
+
+      /*
+      ==================================================
+      NOME SERVIÇO
+      ==================================================
+      */
+
+      const nomeServico =
+        linha.nome_servico ||
+        linha.descricao ||
+        "";
+
+      /*
+      ==================================================
+      ACUMULADO ORIGINAL DA PLANILHA
+      ==================================================
+      */
+
+      const acumuladoOriginal =
+        numero(
+
+          linha.acumulado_mes ||
+
+          linha.acumulado ||
+
+          linha.executado
+        );
+
+      /*
+      ==================================================
+      ACUMULADO CALCULADO
+      ==================================================
+      */
+
+      const acumuladoCalculado =
+        acumulados[servico];
+
+      /*
+      ==================================================
+      USA CALCULADO OU ORIGINAL
+      ==================================================
+      */
+
+      const acumuladoMes =
+
+        acumuladoCalculado !== undefined
+
+          ? acumuladoCalculado
+
+          : acumuladoOriginal;
+
+      /*
+      ==================================================
+      PREVISTO DO MÊS
+      ==================================================
+      */
+
+      const previstoMes =
+        numero(
+
+          linha.previsto_mes ||
+
+          linha.meta_mes ||
+
+          linha.previsto ||
+
+          linha.meta
+        );
+
+      /*
+      ==================================================
+      VALOR FIXO
+      ==================================================
+
+      REGRA:
+      VALOR FINAL =
+      VALOR FIXO × ACUMULADO MÊS
+      */
+
+      const valorFixo =
+        numero(
+
+          linha.valor ||
+
+          linha.valor_fixo ||
+
+          linha.valor_unitario
+        );
+
+      /*
+      ==================================================
+      RETORNA OBJETO FINAL
+      ==================================================
+      */
+
+      return {
+
+        servico,
+
+        nome_servico: nomeServico,
+
+        acumulado_mes: acumuladoMes,
+
+        semana_1:
+          numero(linha.semana_1),
+
+        semana_2:
+          numero(linha.semana_2),
+
+        semana_3:
+          numero(linha.semana_3),
+
+        semana_4:
+          numero(linha.semana_4),
+
+        medicao:
+          linha.medicao || "",
+
+        previsto_mes:
+          previstoMes,
+
+        /*
+        ================================================
+        ÍNDICE EXECUÇÃO
+        ================================================
+
+        LIMITADO EM 100%
+        */
+
+        porcentagem_execucao:
+
+          calcularIndiceExecucao(
+
+            acumuladoMes,
+
+            previstoMes
+          ),
+
+        /*
+        ================================================
+        VALOR FINANCEIRO
+        ================================================
+
+        REGRA:
+        VALOR FIXO × ACUMULADO
+        */
+
+        valor_fixo:
+          valorFixo,
+
+        valor:
+          valorFixo *
+          acumuladoMes,
+
+        /*
+        ================================================
+        STATUS
+        ================================================
+        */
+
+        status:
+
+          acumuladoMes > 0
+
+            ? "Com dados"
+
+            : "Sem dados"
+      };
+    });
+}
+
+
+/*
+========================================================
+CALCULA ACUMULADOS
+========================================================
+
+EXEMPLOS:
+P1 → Peso
+P2 → Viagens
+P5 → KM
+P9 → Equipes
+========================================================
+*/
+
+function calcularAcumuladosPorServico(
+
+  resumo,
+
+  p5,
+
+  p6,
+
+  p9
+) {
+
+  const acumulados = {};
+
+  /*
+  ======================================================
+  RESUMO DIÁRIO
+  ======================================================
+  */
+
+  resumo.forEach(linha => {
+
+    const servico =
+
+      linha.servicos_p ||
+
+      linha.servico ||
+
+      "";
+
+    if (!servico) return;
+
+    if (!acumulados[servico]) {
+
+      acumulados[servico] = 0;
+    }
+
+    /*
+    ====================================================
+    P1 / P4 / P12 → PESO
+    ====================================================
+    */
+
+    if (
+
+      servico === "P1" ||
+
+      servico === "P4" ||
+
+      servico === "P12"
+    ) {
+
+      acumulados[servico] +=
+
+        numero(
+
+          linha.peso_t ||
+
+          linha.peso_total
+        );
+    }
+
+    /*
+    ====================================================
+    P2 → VIAGENS
+    ====================================================
+    */
+
+    else if (
+
+      servico === "P2.1" ||
+
+      servico === "P2.2"
+    ) {
+
+      acumulados[servico] +=
+
+        numero(
+
+          linha.qtd_viagens ||
+
+          linha.viagens
+        );
+    }
+  });
+
+  /*
+  ======================================================
+  P5 → KM
+  ======================================================
+  */
+
+  if (p5.length) {
+
+    acumulados["P5"] =
+
+      p5.reduce((soma, linha) => {
+
+        return soma +
+
+          numero(
+            linha.km_executado
+          );
+
+      }, 0);
+  }
+
+  /*
+  ======================================================
+  P6 → KM
+  ======================================================
+  */
+
+  if (p6.length) {
+
+    acumulados["P6"] =
+
+      p6.reduce((soma, linha) => {
+
+        return soma +
+
+          numero(
+            linha.km_executado
+          );
+
+      }, 0);
+  }
+
+  /*
+  ======================================================
+  P9 → EQUIPES
+  ======================================================
+  */
+
+  if (p9.length) {
+
+    acumulados["P9"] =
+
+      p9.reduce((soma, linha) => {
+
+        return soma +
+
+          numero(
+            linha.qtd_equipe
+          );
+
+      }, 0);
+  }
+
+  return acumulados;
+}
+
+
+/*
+========================================================
+RENDERIZA DETALHE DO SERVIÇO
+========================================================
+
+IMPORTANTE:
+P1 E P2 NÃO MOSTRAM
+VALOR ESTIMADO
+========================================================
+*/
+
+function renderDetalheServico(codigo) {
+
+  const detalhe =
+    document.getElementById(
+      "detalheServico"
+    );
+
+  if (!detalhe) return;
+
+  const item =
+    painelExecutivo.find(
+
+      p => p.servico === codigo
+    );
+
+  if (!item) {
+
+    detalhe.innerHTML =
+      "<p>Serviço não encontrado.</p>";
+
+    return;
+  }
+
+  detalhe.innerHTML = `
+
+    <h2>
+      ${item.servico}
+      -
+      ${item.nome_servico}
+    </h2>
+
+    <section class="cards">
+
+      <div class="card">
+
+        <span>
+          Acumulado no mês
+        </span>
+
+        <strong>
+          ${formatarNumero(
+            item.acumulado_mes
+          )}
+        </strong>
+
+        <small>
+          ${item.medicao}
+        </small>
+
+      </div>
+
+      <div class="card">
+
+        <span>
+          Previsto mês
+        </span>
+
+        <strong>
+          ${formatarNumero(
+            item.previsto_mes
+          )}
+        </strong>
+
+        <small>
+          meta contratual
+        </small>
+
+      </div>
+
+      <div class="card">
+
+        <span>
+          Execução
+        </span>
+
+        <strong>
+          ${formatarNumero(
+            item.porcentagem_execucao
+          )}%
+        </strong>
+
+        <small>
+          máximo 100%
+        </small>
+
+      </div>
+
+      ${
+        item.servico !== "P1" &&
+
+        item.servico !== "P2.1" &&
+
+        item.servico !== "P2.2"
+
+          ? `
+
+            <div class="card">
+
+              <span>
+                Valor estimado
+              </span>
+
+              <strong>
+                ${formatarMoeda(
+                  item.valor
+                )}
+              </strong>
+
+              <small>
+                valor fixo × acumulado
+              </small>
+
+            </div>
+          `
+
+          : ""
+      }
+
+    </section>
+  `;
+}
+
+
+/*
+========================================================
+CÁLCULO DO ÍNDICE
+========================================================
+
+REGRA:
+NUNCA PASSA DE 100%
+========================================================
+*/
+
+function calcularIndiceExecucao(
+
+  acumulado,
+
+  previsto
+) {
+
+  const realizado =
+    numero(acumulado);
+
+  const meta =
+    numero(previsto);
+
+  if (meta <= 0) return 0;
+
+  const indice =
+
+    (realizado / meta) * 100;
+
+  /*
+  ======================================================
+  LIMITA EM 100%
+  ======================================================
+  */
+
+  return Math.min(indice, 100);
+}
+
+
+/*
+========================================================
+NORMALIZA OBJETO
+========================================================
+
+EXEMPLO:
+"Previsto Mês"
+
+VIRA:
+previsto_mes
+========================================================
+*/
+
+function normalizarObjeto(objeto) {
+
+  const novo = {};
+
+  Object.keys(objeto).forEach(chave => {
+
+    const novaChave =
+
+      normalizar(chave)
+
+      .replace(/ª/g, "a")
+
+      .replace(/º/g, "o")
+
+      .replace(/\s+/g, "_")
+
+      .replace(/[^\w]/g, "");
+
+    novo[novaChave] =
+      objeto[chave];
+  });
+
+  return novo;
+}
+
+
+/*
+========================================================
+CONVERTE TEXTO EM NÚMERO
+========================================================
+*/
+
+function numero(valor) {
+
+  if (
+
+    valor === null ||
+
+    valor === undefined ||
+
+    valor === ""
+  ) {
+
+    return 0;
+  }
+
+  if (
+    typeof valor === "number"
+  ) {
+
+    return valor;
+  }
+
+  let texto =
+    String(valor)
+
+    .replace(/[^\d,.-]/g, "")
+
+    .replace(/\./g, "")
+
+    .replace(",", ".");
+
+  const convertido =
+    Number(texto);
+
+  return isNaN(convertido)
+
+    ? 0
+
+    : convertido;
+}
+
+
+/*
+========================================================
+FORMATAÇÕES
+========================================================
+*/
+
+function formatarNumero(valor) {
+
+  return numero(valor)
+
+    .toLocaleString("pt-BR", {
+
+      minimumFractionDigits: 0,
+
+      maximumFractionDigits: 2
+    });
+}
+
+function formatarMoeda(valor) {
+
+  return numero(valor)
+
+    .toLocaleString("pt-BR", {
+
+      style: "currency",
+
+      currency: "BRL"
+    });
+}
+
+
+/*
+========================================================
+NORMALIZA TEXTO
+========================================================
+*/
+
+function normalizar(texto) {
+
+  return String(texto || "")
+
+    .toLowerCase()
+
+    .normalize("NFD")
+
+    .replace(/[\u0300-\u036f]/g, "")
+
+    .trim();
+}
