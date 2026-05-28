@@ -823,9 +823,9 @@ const totalEquipes =
       }
 
       return soma + numero(
+        item.peso_t ||
         item.peso ||
         item.peso_total ||
-        item.peso_t ||
         item.tonelada ||
         item.toneladas ||
         0
@@ -956,10 +956,16 @@ else {
     )}
 
     ${criarCard(
-      "Peso",
-      `${formatarNumero(totalPeso)} t`,
-      "toneladas"
-    )}
+  "Peso",
+
+  codigo === "P12"
+    ? formatarNumero(totalPeso)
+    : `${formatarNumero(totalPeso)} t`,
+
+  codigo === "P12"
+    ? "executado"
+    : "toneladas"
+)}
 
     ${criarCard(
       "Viagens",
